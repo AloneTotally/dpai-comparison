@@ -1,0 +1,6 @@
+% Model,C52_3D_base_unit_cell_recesses_v2.mph
+% Version,COMSOL 5.2.0.220
+% Date,"Jul 12 2026, 23:22"
+% Table,Table 1 - Global Evaluation 1 (V_unit)
+% H_texture (m),t (s),"R_texture=5E-6, Volume of each unit (m^3)","R_texture=1.25E-5, Volume of each unit (m^3)","R_texture=2E-5, Volume of each unit (m^3)","R_texture=2.75E-5, Volume of each unit (m^3)","R_texture=3.5E-5, Volume of each unit (m^3)"
+2.0E-5,0,4.996073017812756E-13,4.975456327076203E-13,4.937168155053893E-13,4.881208532074962E-13,4.807577452718618E-13
