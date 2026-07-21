@@ -1,78 +1,46 @@
-# dpai-comparison
-This is a project meant to compare how differing micro-nanotexture geometries affect the performance of a carbon capture film.
+# Geometry n(t) comparison — setup
 
-# React + TypeScript + Vite
+## 1. Create a virtual environment (recommended)
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
-
-Currently, two official plugins are available:
-
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
-
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the ESLint configuration
-
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
-
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-
+```bash
+python -m venv venv
+source venv/bin/activate        # macOS/Linux
+venv\Scripts\activate           # Windows
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+## 2. Install dependencies
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
-
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-
+```bash
+pip install -r requirements.txt
 ```
+
+## 3. Launch Jupyter
+
+```bash
+jupyter notebook geometry_comparison.ipynb
+```
+
+or, if you prefer JupyterLab:
+
+```bash
+jupyter lab geometry_comparison.ipynb
+```
+
+This opens the notebook in your browser. Run all cells with **Cell → Run All** (or `Shift+Enter` through each cell).
+
+## 4. Use your real data
+
+By default the notebook uses synthetic demo curves. To use your own COMSOL export:
+
+1. Save your data as a CSV with columns `geometry`, `t`, `n` (any column order, case doesn't matter).
+2. In the second code cell, set:
+   ```python
+   CSV_PATH = "your_file.csv"
+   ```
+3. Re-run all cells.
+
+Optionally change `T_PROCESS` (in seconds) in the ranking cell to check a different operating time.
+
+## Editing in VS Code instead
+
+If you'd rather not use the browser Jupyter UI, VS Code with the **Jupyter** and **Python** extensions installed can open and run `.ipynb` files directly — just point it at the same virtual environment as the interpreter.
