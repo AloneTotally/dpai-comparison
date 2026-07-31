@@ -6,58 +6,73 @@ microtexture families (cones, grooves, edges, recessed edges, clustered
 pillars, ...), using geometry-agnostic descriptors and a leadership-duration
 score instead of a single fixed-time snapshot.
 
-WHAT YOU NEED TO FILL IN (marked TODO below):
-  - L_UNIT / H_F: the baseline unit-cell length / film thickness used to
-    normalize R_texture, H_texture. If these differ by family, put them in
-    FAMILY_UNIT_CONSTANTS instead of a single global.
-  - FAMILIES dict: one entry per microtexture family, pointing at that
-    family's already-parsed series / vol_map / area_map (whatever you
-    currently have in the notebook), plus the names of its geometry
-    parameters (R,H for cones; width,depth for grooves; etc).
+CHANGES IN THIS VERSION (from the previous draft):
+  1. Cross-family leadership scoring bug fix: early_leadership_share is now
+     computed ONCE across a combined series spanning every family, instead
+     of once per family. Previously each family's geometries only ever
+     competed against their own siblings, so every family could produce
+     its own "winner" with an inflated share -- the ranked bar chart and
+     SA/V scatter were then comparing numbers that were never actually on
+     the same scale.
+  2. REFERENCE_TIMES no longer includes t134900 (undocumented, inherited
+     value). Near-equilibrium is now n_near_eq, a windowed average over
+     NEAR_EQ_WINDOW = (160_000, 200_000) s -- see preprocessing.py's
+     window_average() docstring for the empirical justification (checked
+     against both the smallest and largest geometries in the sweep).
+  3. EARLY_WINDOW upper bound corrected from 50,000 s to 10,000 s, to
+     match the empirical t1/2 ~= 10,000 s (from the R=5um,H=5um curve)
+     rather than the earlier hand-calculated 15,000 s estimate. This
+     keeps "early leadership" inside the diffusion-controlled regime and
+     out of the region where near-equilibrium volume-depletion effects
+     (e.g. deep grooves) start to distort the score.
+  4. Missing SA/V matches now hard-fail after collecting a full list,
+     instead of printing a warning and silently continuing with NaN.
+  5. New column: n_eq_per_V (near-equilibrium capacity density), to give
+     the groove volume-depletion hypothesis a direct numeric test in the
+     table itself.
+  6. pct_eq_t15000 retained only as a diagnostic column -- do not use it
+     as the y-axis for cross-family trade-off plots; use n_t15000 or
+     n_near_eq instead (see report methodology note on why % of
+     equilibrium is misleading for cross-family comparison).
 
-Everything else (bug fixes, leadership duration, master table assembly)
-should run as-is once FAMILIES is populated.
+STILL TODO (unchanged from before):
+  - L_UNIT / H_F: fill in if fractional R/H normalization is needed.
+  - FAMILIES dict: populate per family as before.
 """
 
 import numpy as np
 import pandas as pd
 
 from viz_utils import normalize_label  # shared with plots.py and leadership_timeline_report
+from preprocessing import window_average, NEAR_EQ_WINDOW  # shared definition, single source of truth
 
 # ---------------------------------------------------------------------------
-# Reference times — anchored to the untextured baseline's own kinetics,
-# not arbitrary. Keep all three in the table; none of them is "the" metric.
+# Reference times
 # ---------------------------------------------------------------------------
+# Fixed-timestamp snapshots. t134900 removed -- see module docstring.
 REFERENCE_TIMES = {
-    "t2000": 2000,        # ~20% baseline saturation (mesh independence anchor)
-    "t15000": 15000,      # ~baseline half-saturation
-    "t134900": 134900,    # ~baseline near-equilibrium
+    "t2000": 2000,     # mesh-independence validation anchor
+    "t15000": 15000,   # ~baseline half-saturation (see note in preprocessing.py
+                        # re: empirical t1/2 ~= 10,000 s -- update if/when this
+                        # is confirmed across more than one geometry)
 }
 
-# Window over which "early-time leadership" is scored. Adjust if your
-# flipping behavior extends beyond 50k s.
-EARLY_WINDOW = (1, 50_000)
+# Near-equilibrium reference is now a windowed average, not a fixed
+# timestamp -- imported from preprocessing.py so there is exactly one
+# definition of the window shared across the whole pipeline.
+# NEAR_EQ_WINDOW = (160_000, 200_000)  # <- lives in preprocessing.py
+
+# Window over which "early-time leadership" is scored. Bound corrected to
+# match the empirical t1/2 (~10,000 s) rather than the earlier 50,000 s,
+# which bled into the region where volume-depletion effects on low-capacity
+# geometries (e.g. deep grooves) start to distort the score.
+EARLY_WINDOW = (1, 10_000)
 
 # TODO: fill in. If L_unit / H_f are the same across all families, one
 # constant each is enough. If they differ by family, replace with a dict
 # keyed by family name.
 L_UNIT = None   # e.g. 100e-6
 H_F = None      # e.g. 70e-6
-
-
-# ---------------------------------------------------------------------------
-# Bug fixes from the existing notebook code
-# ---------------------------------------------------------------------------
-
-# NOTE: normalize_label is now imported from viz_utils (NFKC-based, so it
-# handles µ/μ and similar issues generally rather than by hand-typed swap).
-#
-# The old get_color() (color-by-R-rank, parsed via regex from an
-# "R=... H=..." label) has been removed: it's not called anywhere in this
-# file or plots.py, and it assumed absolute-µm-formatted labels, which
-# conflicts with this session's switch to R_texture/H_texture as fractions
-# of L_unit/H_f. For per-geometry coloring, use viz_utils.get_color()
-# directly, keyed by (family_name, key) -- see plots.py.
 
 
 # ---------------------------------------------------------------------------
@@ -76,7 +91,13 @@ def interp_at(points, t_query):
 def leadership_segments(series, t_start=EARLY_WINDOW[0], t_end=EARLY_WINDOW[1], n_steps=400):
     """Returns list of (start, end, key) segments — same logic as
     leadership_timeline_report, but returns raw segments (keys, not
-    display labels) so they can be aggregated into scores."""
+    display labels) so they can be aggregated into scores.
+
+    `series` can be a single family's series dict, OR a combined dict
+    spanning multiple families (e.g. keyed by (family_name, R, H)) -- the
+    function itself is family-agnostic; it just compares whatever keys
+    it's given against each other. See build_master_table() for how the
+    combined dict is built for cross-family scoring."""
     time_grid = np.logspace(np.log10(t_start), np.log10(t_end), n_steps)
     leaders = []
     for t in time_grid:
@@ -106,7 +127,12 @@ def leadership_duration_scores(series, t_start=EARLY_WINDOW[0], t_end=EARLY_WIND
     Log-time weighting matches how you actually look at these curves
     (log-scaled x-axis), so a geometry that leads from 1s-10s counts the
     same as one leading from 1000s-10000s, rather than being swamped by
-    the linear-time size of later segments."""
+    the linear-time size of later segments.
+
+    IMPORTANT: pass a series dict that already spans everything you want
+    these scores to be comparable against. If called once per family, the
+    resulting scores are only comparable WITHIN that family -- see
+    build_master_table() for the cross-family combined-series usage."""
     segments = leadership_segments(series, t_start, t_end)
     log_total = np.log10(t_end) - np.log10(t_start)
     scores = {}
@@ -161,13 +187,30 @@ def _round_key(key, ndigits=9):
 
 
 def build_master_table(families=FAMILIES):
+    # -----------------------------------------------------------------
+    # Cross-family leadership scoring (fix #1): build ONE combined series
+    # spanning every family, keyed by (family_name, raw_key) so identical
+    # (R, H) pairs from different families don't collide. Scored once,
+    # here, before the per-row loop -- NOT per family -- so every
+    # geometry is genuinely competing against every other geometry in the
+    # dataset for its leadership share, not just its own siblings.
+    # -----------------------------------------------------------------
+    combined_series = {}
+    for family_name, fam in families.items():
+        for raw_key, g in fam["series"].items():
+            combined_series[(family_name, raw_key)] = g
+    duration_scores = leadership_duration_scores(
+        combined_series, t_start=EARLY_WINDOW[0], t_end=EARLY_WINDOW[1]
+    )
+
     rows = []
+    missing_sa_v = []  # collected, then hard-fail after the full pass (fix #4)
+
     for family_name, fam in families.items():
         series = fam["series"]
         vol_map = {_round_key(k): v for k, v in fam["vol_map"].items()}
         area_map = {_round_key(k): v for k, v in fam["area_map"].items()}
         param_names = fam["param_names"]
-        duration_scores = leadership_duration_scores(series)
 
         for raw_key, g in series.items():
             key = _round_key(raw_key)
@@ -182,33 +225,63 @@ def build_master_table(families=FAMILIES):
             row["SA"] = area_map.get(key)
             row["V"] = vol_map.get(key)
 
-            # flag (rather than silently pass through) a lookup miss, since
-            # a missing SA/V quietly turns into NaN descriptors downstream
-            # with no indication of *why* that geometry vanished from a plot
             if row["SA"] is None or row["V"] is None:
-                print(f"[warning] no SA/V match for {family_name} key={key} "
-                      f"(raw key={raw_key}) -- check area_map/vol_map keys "
-                      f"and rounding")
+                missing_sa_v.append((family_name, key, raw_key))
 
             pts = sorted(g["points"], key=lambda p: p[0])
             for label, t in REFERENCE_TIMES.items():
                 row[f"n_{label}"] = interp_at(pts, t)
 
-            steady_state = pts[-1][1] if pts else None
-            row["n_eq"] = steady_state
-            # use `is not None` rather than bare truthiness, so a
-            # legitimately-zero steady_state or n_t15000 isn't treated the
-            # same as "missing data"
-            if steady_state is not None and row["n_t15000"] is not None:
-                row["pct_eq_t15000"] = (row["n_t15000"] / steady_state * 100) if steady_state != 0 else None
+            # --- Near-equilibrium reference (fix #2): windowed average,
+            # not a fixed timestamp. See preprocessing.window_average()
+            # and NEAR_EQ_WINDOW for the justification. Returns None if a
+            # curve doesn't actually reach the window (shouldn't happen
+            # here since every family runs to 200,000 s, but surfaced
+            # rather than silently producing a wrong number if a family's
+            # data ever changes).
+            n_near_eq = window_average(pts, *NEAR_EQ_WINDOW)
+            row["n_near_eq"] = n_near_eq
+            row["n_eq"] = n_near_eq  # kept for backward compatibility with
+                                      # any existing plot code referencing n_eq
+
+            # --- New: near-equilibrium capacity density (fix #5). Direct
+            # numeric test of the volume-depletion hypothesis -- a deep
+            # groove with low n_eq but high n_eq_per_V is consistent with
+            # "saturates a small remaining volume quickly", vs. a
+            # geometry with both low n_eq AND low n_eq_per_V, which would
+            # need a different explanation.
+            if n_near_eq is not None and row["V"]:
+                row["n_eq_per_V"] = n_near_eq / row["V"]
+            else:
+                row["n_eq_per_V"] = None
+
+            # pct_eq_t15000: retained as a DIAGNOSTIC column only (fix #6).
+            # Do not use as the axis for cross-family trade-off plots --
+            # it normalizes away exactly the capacity differences those
+            # plots are meant to reveal. Use n_t15000 / n_near_eq instead.
+            if n_near_eq is not None and row["n_t15000"] is not None:
+                row["pct_eq_t15000"] = (row["n_t15000"] / n_near_eq * 100) if n_near_eq != 0 else None
             else:
                 row["pct_eq_t15000"] = None
 
-            # duration_scores is keyed by the raw series key, not the
-            # rounded one -- look up with raw_key to match
-            row["early_leadership_share"] = duration_scores.get(raw_key, 0.0)
+            # duration_scores is keyed by (family_name, raw_key) now, to
+            # match the combined_series construction above.
+            row["early_leadership_share"] = duration_scores.get((family_name, raw_key), 0.0)
 
             rows.append(row)
+
+    if missing_sa_v:
+        print(f"[ERROR] {len(missing_sa_v)} row(s) missing SA/V match:")
+        for family_name, key, raw_key in missing_sa_v:
+            print(f"  family={family_name} key={key} (raw key={raw_key})")
+        raise ValueError(
+            f"{len(missing_sa_v)} row(s) missing SA/V data -- check "
+            "vol_map/area_map keys for an R/H swap or a rounding mismatch "
+            "before building the table. (Previously this only printed a "
+            "warning and continued with NaN, which silently produced holes "
+            "in downstream heatmaps -- see square_recessed frozen-geometry "
+            "bug for why this is now a hard stop.)"
+        )
 
     df = pd.DataFrame(rows)
     df = add_universal_descriptors(df)
