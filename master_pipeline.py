@@ -211,10 +211,15 @@ def build_master_table(families=FAMILIES):
         vol_map = {_round_key(k): v for k, v in fam["vol_map"].items()}
         area_map = {_round_key(k): v for k, v in fam["area_map"].items()}
         param_names = fam["param_names"]
+        # "removed" (subtractive: recesses/grooves) or "added" (additive:
+        # pillars) -- see build_family_entry()'s docstring in preprocessing.py.
+        # Defaults to "removed" for any FAMILIES entry built before this
+        # field existed, so older data doesn't break.
+        volume_type = fam.get("volume_type", "removed")
 
         for raw_key, g in series.items():
             key = _round_key(raw_key)
-            row = {"family": family_name}
+            row = {"family": family_name, "volume_type": volume_type}
             # key is assumed to be a tuple matching param_names, e.g. (R, H)
             if isinstance(key, tuple):
                 for name, val in zip(param_names, key):

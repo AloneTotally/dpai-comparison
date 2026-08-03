@@ -316,16 +316,28 @@ def build_series(uptake_rows):
 
 # ---- NEW: assemble one FAMILIES[family_name] entry ----
 def build_family_entry(uptake_txt, volume_csv_txt=None, area_csv_txt=None,
-                        param_names=("R", "H")):
+                        param_names=("R", "H"), volume_type="removed"):
     """
     Takes the same raw text your existing parsers already accept (COMSOL
     .txt uptake export, plus optional volume/area .csv exports) and
     returns exactly the dict shape master_pipeline.py's FAMILIES expects:
 
-        {"series": ..., "vol_map": ..., "area_map": ..., "param_names": ...}
+        {"series": ..., "vol_map": ..., "area_map": ..., "param_names": ...,
+         "volume_type": ...}
 
     Exports are cleaned into the physical R/H coordinate system using the
     editable RADIUS_SWEEP_UM and HEIGHT_SWEEP_UM constants above.
+
+    volume_type: "removed" for subtractive geometries (recesses, grooves --
+    V_unit is polymer volume taken away, so LESS remaining material to hold
+    CO2) or "added" for additive geometries (pillars -- V_unit is extra
+    polymer volume added, so MORE material to hold CO2). This matters
+    because n_eq_per_V (near-eq uptake / V_unit) means opposite things
+    depending on which type a family is -- see plot_volume_normalized_
+    comparison() in advanced_analysis.py for how this is used downstream.
+    Defaults to "removed" since most families studied so far (recesses,
+    grooves) are subtractive; pass volume_type="added" explicitly for
+    pillar families.
     """
     uptake_rows = parse_comsol_txt(uptake_txt)
     series, all_r, all_h = build_series(uptake_rows)
@@ -347,6 +359,7 @@ def build_family_entry(uptake_txt, volume_csv_txt=None, area_csv_txt=None,
         "vol_map": vol_map,
         "area_map": area_map,
         "param_names": param_names,
+        "volume_type": volume_type,
     }
 
 
