@@ -30,13 +30,17 @@ dof_square_additive = [11837,23237,70780,274663]
 time_square_additive = [1.70E+01,2.80E+01,1.71E+02,1402]
 error_square_additive = [0.001014427,0.00085764,9.75146E-05,0.00E+00]
 
+dof_cylindrical_pillars = [12116,23621, 71276, 278469]
+time_cylindrical_pillars = [1.50E+01,3.70E+01,1.50E+02,1360]
+error_cylindrical_pillars = [2.23E-03,1.60E-03,4.70E-04,0.00E+00]
+
 fig, ax1 = plt.subplots(figsize=(8, 6))
 
 # Left axis: relative error
 color1 = 'darkred'
 ax1.set_xlabel('DoF', fontsize=14)
 ax1.set_ylabel('Relative error/%', color=color1, fontsize=14)
-ax1.plot(dof_square_additive, error_square_additive, marker='o', markersize=10, color=color1,
+ax1.plot(dof_cylindrical_pillars, error_cylindrical_pillars, marker='o', markersize=10, color=color1,
           linestyle='-', linewidth=1.5, markerfacecolor=color1,
           markeredgecolor='black', label='Relative error')
 ax1.tick_params(axis='y', labelcolor=color1)
@@ -49,7 +53,7 @@ ax1.yaxis.set_major_formatter(ticker.FuncFormatter(lambda x, _: f'{x:.3g}'))
 ax2 = ax1.twinx()
 color2 = 'navy'
 ax2.set_ylabel('Time/s', color=color2, fontsize=14)
-ax2.plot(dof_square_additive, time_square_additive , marker='s', markersize=9, color=color2,
+ax2.plot(dof_cylindrical_pillars, time_cylindrical_pillars , marker='s', markersize=9, color=color2,
           linestyle='--', linewidth=1.5, markerfacecolor=color2,
           markeredgecolor='black', label='Time')
 ax2.tick_params(axis='y', labelcolor=color2)
