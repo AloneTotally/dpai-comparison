@@ -56,16 +56,22 @@ def _color(family):
 # Figure 1 -- Best-in-class per family, early vs. equilibrium
 # ---------------------------------------------------------------------------
 
-def plot_family_best_comparison(master, early_col="n_t2000", eq_col="n_near_eq", ax=None):
+def plot_family_best_comparison(master, families=None, early_col="n_t2000", eq_col="n_near_eq", ax=None):
     """One bar per family, at that family's OWN best (R,H) -- not a fixed
     point. Two panels: early-time winner, equilibrium winner. Colored by
     taxonomy group so additive/round/sharp/1D read at a glance.
 
     Answers: "which single family wins, at each time horizon" -- nothing
     else. Does not try to also show consistency, robustness, or kinetics.
+    
+    If families=None, uses all families. Pass families=["cone_recessed", ...]
+    to filter (e.g. recess-only comparison).
     """
     if ax is None:
         fig, ax = plt.subplots(1, 2, figsize=(11, 4.5))
+
+    if families is not None:
+        master = master[master["family"].isin(families)]
 
     for col, a, title in [(early_col, ax[0], "Early (t=2,000 s)"),
                            (eq_col, ax[1], "Near-equilibrium")]:
@@ -229,12 +235,80 @@ def plot_isolate_variable_merged(master, families=None, metric="n_near_eq",
     return ax
 
 
+def compute_per_family_optimal_trajectory(combined_series, t_start=1, t_end=200_000, n_steps=300):
+    """For each family independently, compute the argmax geometry (best
+    uptake at that instant) at every time step. Returns a dict keyed by
+    family, containing a DataFrame with t, R*, H*.
+    
+    This is different from the global star trajectory -- it shows HOW EACH
+    FAMILY's optimum drifts over time, rather than WHICH FAMILY leads at
+    each instant. Much more informative about per-family behavior."""
+    time_grid = np.logspace(np.log10(t_start), np.log10(t_end), n_steps)
+    families = {}
+    seen = set()
+    for key in combined_series.keys():
+        family_name = key[0]
+        if family_name in seen:
+            continue
+        seen.add(family_name)
+        fam_geoms = {k: combined_series[k] for k in combined_series.keys() if k[0] == family_name}
+        if not fam_geoms:
+            continue
+        
+        rows = []
+        for t in time_grid:
+            best_key, best_val = None, -np.inf
+            for key, g in fam_geoms.items():
+                pts = sorted(g["points"], key=lambda p: p[0])
+                if not pts or t < pts[0][0]:
+                    continue
+                val = np.interp(t, [p[0] for p in pts], [p[1] for p in pts])
+                if val > best_val:
+                    best_val, best_key = val, key
+            if best_key:
+                _, (R, H) = best_key
+                rows.append({"t": t, "R": R * 1e6, "H": H * 1e6, "n": best_val})
+        families[family_name] = pd.DataFrame(rows)
+    
+    return families
+
+
+def plot_per_family_optimal_trajectory(family_trajs, ax=None):
+    """For each family, plot R*(t) and H*(t) on separate panels, all 5
+    families on the same axes (side-by-side within each panel, colored
+    by family). Shows whether each family's optimum is stable (horizontal)
+    or drifting (sloped), and whether R and H drift together or independently.
+    
+    E.g. if cone_recessed's R*(t) slopes downward while H*(t) slopes 
+    upward, you can see the early-vs-late tradeoff directly -- you don't
+    need snapshots, it's a continuous trace."""
+    if ax is None:
+        fig, ax = plt.subplots(1, 2, figsize=(13, 5))
+    
+    for row_idx, (param, label) in enumerate([("R", "Optimal R (\u00b5m)"),
+                                                ("H", "Optimal H (\u00b5m)")]):
+        a = ax[row_idx]
+        for fam, traj_df in family_trajs.items():
+            if traj_df.empty:
+                continue
+            a.plot(traj_df["t"], traj_df[param], 
+                   color=_color(fam), linewidth=1.8, 
+                   label=FAMILY_LABELS.get(fam, fam), marker="", alpha=0.85)
+        
+        a.set_xlabel("t (s, log scale)")
+        a.set_ylabel(label)
+        a.set_xscale("log")
+        a.grid(True, linewidth=0.3, alpha=0.4)
+    
+    ax[0].legend(fontsize=8, frameon=True, loc="best")
+    fig.suptitle("Per-family optimal parameter trajectories -- how R* and H* drift over time")
+    return ax
+
+
 def compute_optimal_trajectory(rank_df):
-    """Extracts the rank==1 geometry at every time step already computed
-    in rank_df (from compute_rank_trajectory), and unpacks it into R, H,
-    family. This replaces the 3-snapshot landscape-evolution heatmap with
-    a CONTINUOUS trace of the optimum -- no 3D plot needed, since it's
-    really just "which grid point is argmax", tracked over time.
+    """GLOBAL star trajectory: which family holds rank==1 at each instant.
+    Use this for "who's winning right now" -- the per-family version above
+    is better for "how does each family's strategy shift over time."
     """
     rows = []
     leader_idx = rank_df.values.argmin(axis=1)  # rank 1 = min rank value
@@ -246,11 +320,8 @@ def compute_optimal_trajectory(rank_df):
 
 
 def plot_optimal_trajectory(traj_df, ax=None):
-    """Two stacked panels: R*(t) and H*(t), colored by which family holds
-    the optimum at that instant. Step-like by construction since the grid
-    is discrete (25 points per family) -- that's real, not a plotting
-    artifact.
-    """
+    """Global star trajectory: which family is optimum at each time.
+    Step-like by construction since grid is discrete."""
     if ax is None:
         fig, ax = plt.subplots(2, 1, figsize=(9, 6.5), sharex=True)
 
@@ -269,7 +340,7 @@ def plot_optimal_trajectory(traj_df, ax=None):
 
     ax[0].legend(fontsize=7, ncol=2, frameon=False, loc="upper left", bbox_to_anchor=(1.01, 1))
     ax[1].set_xlabel("t (s, log scale)")
-    ax[0].set_title("Trajectory of the optimum (R*, H*) over time")
+    ax[0].set_title("Global optimum trajectory -- which family leads at each time")
     return ax
 
 
@@ -357,6 +428,40 @@ def plot_elasticity_distribution(master, metric="n_near_eq", ax=None):
     return ax
 
 
+def plot_recess_feature_isolation(master, metric="n_near_eq", ax=None):
+    """Three controlled recess-only comparisons, showing which FEATURE
+    actually drives performance differences among recesses.
+    
+    Isolates ONE variable at a time:
+    - Panel 1: Taper (cone vs cylinder, same roundness+dimensionality)
+    - Panel 2: Corner sharpness (cylinder vs square_recessed, same dimensionality)
+    - Panel 3: Dimensionality (square_recessed vs grooves, both sharp)
+    
+    This is the cleanest evidence for "what feature matters" -- not all
+    5 families at once, just the 4 recesses in three focused pairs."""
+    if ax is None:
+        fig, ax = plt.subplots(1, 3, figsize=(15, 4.5), sharey=True)
+
+    comparisons = [
+        (ax[0], "cone_recessed", "cylinder_recessed", "R",
+         "Taper: cone (tapered) vs cylinder (straight)"),
+        (ax[1], "cylinder_recessed", "square_recessed", "R",
+         "Corner sharpness: cylinder (round) vs square (sharp)"),
+        (ax[2], "square_recessed", "grooves", "R",
+         "Dimensionality: square (2D bounded) vs groove (1D channel)"),
+    ]
+
+    for a, fam_a, fam_b, vary, title in comparisons:
+        plot_isolate_variable(master, fam_a, fam_b, metric=metric, vary=vary, ax=a)
+        a.set_title(title)
+        # Remove the "held at median" text, tighten x-label
+        a.set_xlabel(f"{vary} (\u00b5m)")
+
+    fig.suptitle(f"What feature drives recess performance? ({metric})", fontsize=11)
+    plt.tight_layout()
+    return fig, ax
+
+
 def plot_variable_isolation_panel(master, metric="n_near_eq"):
     """The three controlled comparisons in one figure, side by side:
     taper, corner sharpness, dimensionality. Run this instead of the old
@@ -378,16 +483,113 @@ def plot_variable_isolation_panel(master, metric="n_near_eq"):
 # Figure 3 -- Best recess vs. best additive, head-to-head
 # ---------------------------------------------------------------------------
 
-def plot_recess_vs_additive(combined_series, recess_key, pillar_key, ax=None):
-    """combined_series is keyed by (family, (R, H)) as built in
-    build_master_table(). recess_key / pillar_key are those same tuples
-    for the two winning geometries identified from Figures 1-2.
+def get_best_of_group(master, families, metric="n_near_eq"):
+    """Extract the single best (R,H) point from a group of families,
+    measured by the given metric. Returns (family_name, R, H, metric_value)."""
+    sub = master[master["family"].isin(families)]
+    best_row = sub.loc[sub[metric].idxmax()]
+    return (best_row["family"], best_row["R"], best_row["H"], best_row[metric])
 
-    Just two curves. Annotates the crossover time (if any) and the final
-    % gap. This is the fabrication-constraint answer: what do you give
-    up, concretely, by choosing the best buildable recess over the best
-    (currently unbuildable) additive geometry.
-    """
+
+def plot_recess_vs_additive_auto(master, families_dict, metric="n_near_eq", ax=None):
+    """Automatically find the best recess and best pillar, then plot them
+    head-to-head. Simpler than having to look up the keys manually.
+    
+    This IS the "what do you give up by choosing recess" answer.
+    
+    families_dict is the FAMILIES dict from master_pipeline.py, not
+    combined_series (avoids float-key mismatch issues)."""
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(9, 5.5))
+
+    # Find best recess and best pillar
+    recess_families = ["cone_recessed", "cylinder_recessed", "square_recessed", "grooves"]
+    pillar_families = ["square_pillar"]
+    
+    best_recess_fam, r_r, h_r, n_r = get_best_of_group(master, recess_families, metric=metric)
+    best_pillar_fam, r_p, h_p, n_p = get_best_of_group(master, pillar_families, metric=metric)
+    
+    # Find the matching (R, H) key in families_dict using np.isclose
+    def find_matching_key(family_name, target_r, target_h, families_dict, tol=1e-8):
+        """Find the (R,H) key in families_dict[family]["series"] that matches
+        (target_r, target_h) within floating-point tolerance."""
+        series = families_dict[family_name]["series"]
+        for key in series.keys():
+            if isinstance(key, tuple):
+                r, h = key
+            else:
+                r, h = key, None
+            if h is None:
+                if np.isclose(r, target_r, rtol=1e-9, atol=tol):
+                    return key
+            else:
+                if np.isclose(r, target_r, rtol=1e-9, atol=tol) and \
+                   np.isclose(h, target_h, rtol=1e-9, atol=tol):
+                    return key
+        # Fallback: if exact match not found, raise with helpful message
+        raise KeyError(f"No key in {family_name} matches R={target_r}, H={target_h} "
+                       f"(available: {list(series.keys())})")
+
+    recess_key = find_matching_key(best_recess_fam, r_r, h_r, families_dict)
+    pillar_key = find_matching_key(best_pillar_fam, r_p, h_p, families_dict)
+    
+    def get_pts(family_name, key):
+        g = families_dict[family_name]["series"][key]
+        return sorted(g["points"], key=lambda p: p[0])
+
+    pts_r = get_pts(best_recess_fam, recess_key)
+    pts_p = get_pts(best_pillar_fam, pillar_key)
+
+    r_um = r_r * 1e6
+    h_um = h_r * 1e6
+    r_p_um = r_p * 1e6
+    h_p_um = h_p * 1e6
+    
+    ax.plot(*zip(*pts_r), color=_color(best_recess_fam), linewidth=2.2,
+             label=f"Best recess: {FAMILY_LABELS.get(best_recess_fam, best_recess_fam)}\n"
+                   f"R={r_um:.0f}\u00b5m, H={h_um:.0f}\u00b5m")
+    ax.plot(*zip(*pts_p), color=_color(best_pillar_fam), linewidth=2.2,
+             label=f"Best pillar: {FAMILY_LABELS.get(best_pillar_fam, best_pillar_fam)}\n"
+                   f"R={r_p_um:.0f}\u00b5m, H={h_p_um:.0f}\u00b5m")
+
+    # Annotate crossover
+    ts = sorted(set(t for t, _ in pts_r) | set(t for t, _ in pts_p))
+    ts = [t for t in ts if t > 0]
+    n_r_interp = np.interp(ts, *zip(*pts_r))
+    n_p_interp = np.interp(ts, *zip(*pts_p))
+    sign = np.sign(n_p_interp - n_r_interp)
+    flips = np.where(np.diff(sign) != 0)[0]
+    if len(flips):
+        t_cross = ts[flips[0]]
+        ax.axvline(t_cross, color="gray", linestyle="--", linewidth=1, alpha=0.6)
+        ax.text(t_cross, ax.get_ylim()[1] * 0.90, f"crossover\n~{t_cross:.0f}s",
+                fontsize=8, va="top", ha="center", bbox=dict(boxstyle="round,pad=0.3", 
+                facecolor="white", alpha=0.7))
+    else:
+        ax.text(0.98, 0.05, "No crossover\n(pillar leads throughout)",
+                transform=ax.transAxes, fontsize=9, ha="right", va="bottom",
+                bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.7))
+
+    gap_pct = (n_p_interp[-1] - n_r_interp[-1]) / n_r_interp[-1] * 100
+    gap_mol = n_p_interp[-1] - n_r_interp[-1]
+    ax.text(0.02, 0.95, 
+            f"Capacity loss if constrained to recesses:\n"
+            f"{gap_pct:+.1f}% ({gap_mol:+.2e} mol)",
+            transform=ax.transAxes, fontsize=9, va="top",
+            bbox=dict(boxstyle="round,pad=0.4", facecolor="lightyellow", alpha=0.8))
+
+    ax.set_xscale("log")
+    ax.set_xlabel("t (s, log scale)")
+    ax.set_ylabel("n (mol)")
+    ax.set_title("Fabrication tradeoff: best recess vs. best pillar")
+    ax.legend(fontsize=8, loc="lower right")
+    ax.grid(True, which="both", linewidth=0.3, alpha=0.4)
+    return ax, (best_recess_fam, r_r, h_r, n_r, recess_key), (best_pillar_fam, r_p, h_p, n_p, pillar_key)
+
+
+def plot_recess_vs_additive(combined_series, recess_key, pillar_key, ax=None):
+    """Manual version: you pass in the keys directly. Use this if you want
+    to compare a specific pair instead of auto-selecting the best."""
     if ax is None:
         fig, ax = plt.subplots(figsize=(8, 5.5))
 

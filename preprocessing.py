@@ -300,6 +300,151 @@ def window_average(points, t_start=NEAR_EQ_WINDOW[0], t_end=NEAR_EQ_WINDOW[1]):
     return float(np.mean(in_window))
 
 
+# Untextured (flat-film) reference geometry -- from the actual COMSOL
+# base-model export (C52_3D_base_model_only_film_unit_cell_v1), not
+# backed out from rho. Confirmed against the pooled subtractive rho as
+# an independent cross-check: rho_flat computed from this V_flat comes
+# out to 1.5568e7 kg/m^3 vs. the pooled subtractive rho of 1.5570e7
+# kg/m^3, a 0.011% difference -- i.e. the untextured film's equilibrium
+# capacity density sits on the SAME pooled constant as every textured
+# family, with no circularity (V_flat here is the actual export value,
+# not derived from rho).
+V_FLAT_M3 = 5.0000e-13
+AREA_FLAT_M2 = 1.0000e-8
+
+# ---------------------------------------------------------------------------
+# Untextured (flat-film) baseline
+# ---------------------------------------------------------------------------
+# The untextured reference run is a single 1D global evaluation (one
+# unit cell, no R/H sweep), not a per-geometry sweep export, so it does
+# not go through parse_comsol_txt/build_series like the seven textured
+# families. Expected file lives alongside the other per-family exports
+# (uptake/volume/area .txt/.csv), e.g. data/untextured_uptake.txt.
+#
+# Raw export header is "% x   Height" -- this is an artifact of the
+# COMSOL export template (a leftover global-variable name), not a
+# geometric height. The two columns are actually t (s) and n (mol CO2).
+
+def parse_untextured_txt(text: str):
+    """Untextured global-evaluation COMSOL .txt export -> sorted list of
+    (t, n_mol) tuples. No R/H columns to parse -- just two numeric
+    columns per data row. Deduplicates repeat timestamps the same way
+    parse_comsol_txt does (COMSOL occasionally re-exports one timestamp,
+    e.g. t=100s appearing twice with an identical value)."""
+    points = []
+    seen = set()
+    for raw_line in text.replace("\r", "").split("\n"):
+        line = raw_line.strip()
+        if not line or line.startswith("%"):
+            continue
+        parts = line.split()
+        if len(parts) < 2:
+            continue
+        t = parse_numeric_cell(parts[0])
+        n = parse_numeric_cell(parts[1])
+        if t is None or n is None or t in seen:
+            continue
+        seen.add(t)
+        points.append((t, n))
+    points.sort(key=lambda p: p[0])
+    return points
+
+
+def build_untextured_baseline(uptake_txt, t_process_list=(500, 2000, 15000),
+                               near_eq_window=NEAR_EQ_WINDOW):
+    """Returns the untextured baseline in exactly the shape section2_figures
+    / section3_figures expect for the checkpoint overlay (fig8, and the
+    optional flat-reference line on fig6/fig3_2):
+
+        {"points": [...], "n_t500": ..., "n_t2000": ..., "n_t15000": ...,
+         "n_near_eq": ...}
+
+    All values in mol CO2, unconverted -- kg conversion happens at plot
+    time in section2_figures/section3_figures, same convention as every
+    other family's n_* columns.
+
+    IMPORTANT: t=500 and t=2000 land exactly on exported timestamps in
+    the untextured file, but t=15000 does not (nearest exported points
+    are 10,000 s and 20,000 s). This uses interp_at() (linear, via
+    np.interp) for every t_process_list entry -- the SAME function
+    rank_at()/check_stability() already use to compute n_t15000 for
+    every textured family (see PRESET_TIMES above). Do not give the
+    untextured baseline a different interpolation scheme (e.g. sqrt(t)
+    or log(t)) than every other family uses at this checkpoint; that
+    would make it non-comparable rather than more "correct". n_near_eq
+    uses window_average(), which is NOT interpolated (mean of actual
+    exported points inside near_eq_window), matching how every other
+    family's near-equilibrium reference is computed.
+    """
+    points = parse_untextured_txt(uptake_txt)
+    baseline = {"points": points}
+    for t in t_process_list:
+        baseline[f"n_t{t}"] = interp_at(points, t)
+    baseline["n_near_eq"] = window_average(points, *near_eq_window)
+    return baseline
+
+
+# ---- NEW: local log-log slope alpha(t) = d(ln n)/d(ln t), diagnostic only ----
+# NOT wired into build_untextured_baseline() and NOT used by any figure yet.
+# This is a standalone check to run BEFORE deciding whether the flat film's
+# alpha(t) belongs on Figure 2 (see early_regime_fit.py) -- see caveat below
+# about point density.
+def compute_alpha_series(points):
+    """points: list of (t, n) tuples, sorted by t, t>0 and n>0 required
+    (log undefined otherwise -- t=0 rows, if any, are dropped).
+
+    Returns list of (t_mid, alpha) tuples, one per consecutive pair of
+    points, where t_mid is the geometric mean of the pair's t values and
+    alpha is the slope of ln(n) vs ln(t) between them:
+
+        alpha = [ln(n2) - ln(n1)] / [ln(t2) - ln(t1)]
+
+    This is a simple two-point finite difference, NOT a windowed/rolling
+    fit -- if early_regime_fit.py's alpha(t) for the textured families
+    uses a rolling window or a different smoothing scheme, this will NOT
+    be numerically comparable to those curves as-is. Check that file's
+    method before overlaying results from this function on Figure 2.
+
+    CAVEAT: the untextured export has only 3 points before t=2000s and
+    then jumps to 10,000/20,000s (see build_untextured_baseline docs).
+    Two-point finite difference across that gap will be a coarse, noisy
+    estimate of alpha in that region -- treat any alpha value spanning
+    the 2000->10000s gap as low-confidence, not a reliable local slope.
+    """
+    pts = [(t, n) for t, n in points if t > 0 and n > 0]
+    pts.sort(key=lambda p: p[0])
+    alphas = []
+    for (t1, n1), (t2, n2) in zip(pts[:-1], pts[1:]):
+        if t2 == t1:
+            continue
+        alpha = (np.log(n2) - np.log(n1)) / (np.log(t2) - np.log(t1))
+        t_mid = np.sqrt(t1 * t2)  # geometric mean, consistent with log-spacing
+        alphas.append((t_mid, alpha))
+    return alphas
+
+
+def check_flat_alpha(points, alpha_target=0.5, tol=0.05):
+    """Prints alpha(t) for the untextured baseline against the theoretical
+    semi-infinite-slab value (0.5), so you can see BEFORE touching any
+    figure whether the flat film's simulated behaviour actually tracks
+    the analytical baseline, or drifts due to the Langmuir sink term.
+    Does not modify or return anything used elsewhere -- print-only
+    diagnostic, matching the pattern of check_early_collapse() in
+    section3_figures.py."""
+    alphas = compute_alpha_series(points)
+    if not alphas:
+        print("[check_flat_alpha] not enough points to compute alpha(t).")
+        return alphas
+    print(f"[check_flat_alpha] alpha(t) for untextured baseline "
+          f"(target={alpha_target}, tol={tol}):")
+    for t_mid, alpha in alphas:
+        flag = "OK" if abs(alpha - alpha_target) <= tol else "DEPARTS"
+        print(f"  t~{t_mid:9.1f} s   alpha={alpha:6.3f}   [{flag}]")
+    print("  Reminder: two-point differences spanning the 2000->10000s "
+          "gap are low-confidence -- see compute_alpha_series() docstring.")
+    return alphas
+
+
 # ---- Build series from raw uptake rows ----
 def build_series(uptake_rows):
     series = {}
@@ -409,3 +554,15 @@ def check_stability(series, preset_times=PRESET_TIMES, near_eq_window=NEAR_EQ_WI
 #     area_csv_txt=open("data/groove_area.csv").read(),
 #     param_names=("width", "depth"),  # if groove's native params differ from R/H
 # )
+#
+# untextured_baseline = build_untextured_baseline(
+#     uptake_txt=open("data/untextured_uptake.txt").read(),
+# )
+# -> pass this dict straight into section2_figures.fig8_vs_untextured(),
+#    and pass V_FLAT_M3 (defined above, from the actual COMSOL export,
+#    NOT backed out) as the V_flat argument to fig6_neq_per_v() /
+#    fig3_2_neq_per_v() / generate_all() for the rho_flat reference line.
+#
+#    section2_figures.generate_all(
+#        master, untextured_baseline=untextured_baseline, V_flat=V_FLAT_M3,
+#    )

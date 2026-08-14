@@ -51,6 +51,11 @@ from preprocessing import window_average, NEAR_EQ_WINDOW  # shared definition, s
 # ---------------------------------------------------------------------------
 # Fixed-timestamp snapshots. t134900 removed -- see module docstring.
 REFERENCE_TIMES = {
+    "t500": 500,       # clean diffusion-kinetics checkpoint -- all families
+                       # still at alpha ~= 0.50 in this window per Fig 2's
+                       # fit; use for cross-family early comparisons instead
+                       # of t2000 where regime-purity matters
+
     "t2000": 2000,     # mesh-independence validation anchor
     "t15000": 15000,   # ~baseline half-saturation (see note in preprocessing.py
                         # re: empirical t1/2 ~= 10,000 s -- update if/when this
@@ -185,6 +190,27 @@ def _round_key(key, ndigits=9):
         return tuple(round(k, ndigits) if isinstance(k, float) else k for k in key)
     return round(key, ndigits) if isinstance(key, float) else key
 
+# ---------------------------------------------------------------------------
+# Unit conversion: mol -> kg CO2, to match outside literature
+# ---------------------------------------------------------------------------
+CO2_MOLAR_MASS_KG_PER_MOL = 44.01e-3  # 44.01 g/mol
+
+def add_kg_columns(df):
+    """Adds a '<col>_kg' version of every absolute molar-quantity column,
+    alongside (not replacing) the mol original. Deliberately excludes
+    pct_eq_t15000 (unitless ratio -- mol cancels, "converting" it is
+    meaningless) and early_leadership_share (not a molar quantity).
+    n_eq_per_V (mol/m^3) IS converted, since it's still an absolute molar
+    density, just per-volume rather than per-geometry."""
+    mol_cols = [c for c in df.columns
+                if (c.startswith("n_") or c == "n_eq_per_V")
+                and not c.endswith("_kg")]
+    for col in mol_cols:
+        df[f"{col}_kg"] = df[col] * CO2_MOLAR_MASS_KG_PER_MOL
+    return df
+
+
+
 
 def build_master_table(families=FAMILIES):
     # -----------------------------------------------------------------
@@ -290,6 +316,7 @@ def build_master_table(families=FAMILIES):
 
     df = pd.DataFrame(rows)
     df = add_universal_descriptors(df)
+    df = add_kg_columns(df)
     return df
 
 
